@@ -17,7 +17,7 @@ min_date_1yr <- max_date - years(1) + days(1)
 ```
 
 ```{r dbcon, include=FALSE, eval=FALSE}
-con <- DBI::dbConnect(odbc::odbc(), "PHAR proxy")
+con <- DBI::dbConnect(odbc::odbc(), "PHAR")
 
 ```
 
@@ -46,7 +46,7 @@ rrv_raw <- DBI::dbGetQuery(con,
                              -- LEFT JOIN dh_public_health.phess_release.events_buruli_ulcer_exposure buex ON ce.EVENT_ID = buex.EVENT_ID
                              -- LEFT JOIN dh_public_health.phess_release.caselabresults lab ON ce.EVENT_ID = lab.EVENT_ID
                              WHERE ce.CONDITION = 'Ross River virus infection' 
-                             AND EVENT_DATE BETWEEN '2022-01-01' AND '2025-08-31' 
+                             AND EVENT_DATE BETWEEN '2010-01-01' AND '2025-08-31' 
                              ORDER BY EVENT_DATE DESC; 
                              "
                              )
@@ -151,7 +151,6 @@ rrv_nephu_vic_counts_yr <- tabyl(rrv_vic, epiyear) %>%
   #add_footer_lines("2024 is part year from Jan to Mar") %>% 
   add_footer_lines("Cases include Confirmed and Probable cases")
 
-#mu_nephu_vic_counts_yr
 
 ```
 
@@ -162,9 +161,11 @@ data <- rrv_nephu_vic_counts_mth %>%
   mutate(yr = year(epi_MY), 
          mth = month(epi_MY, label=TRUE, abbr=TRUE))
 
-ggplot(data) + 
+max_val <- max(data$total_nephu)
+
+yr_graph <- ggplot(data) + 
   geom_line(aes(x=mth, y=total_nephu, group=factor(yr), col=factor(yr)), linewidth=1) + 
-  scale_y_continuous(breaks=seq(0, 30, by=5)) + 
+  scale_y_continuous(breaks=seq(0, max_val+4, by=5)) + 
   cowplot::theme_cowplot() + 
   theme(plot.title = element_text(size=12)) + 
   labs(title="Monthly case numbers of RRV in NEPHU", 
@@ -172,6 +173,8 @@ ggplot(data) +
          x="", 
          y="Case numbers", 
          col="Year")
+
+ggplotly(yr_graph)
 ```
 
 
