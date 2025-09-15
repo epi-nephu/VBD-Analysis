@@ -1,0 +1,249 @@
+---
+title: "RRV in NEPHU"
+format: dashboard
+---
+
+```{r}
+library(here)
+library(tidyverse)
+library(janitor)
+library(sf)
+library(plotly)
+library(flextable)
+library(flexdashboard)
+
+```
+
+
+```{r set params}
+start_date <- ymd("2010-01-01")
+max_date <- ymd("2025-08-31")
+min_date_1yr <- max_date - years(1) + days(1)
+
+```
+
+```{r dbcon, include=FALSE, eval=TRUE}
+con <- DBI::dbConnect(odbc::odbc(), "PHAR proxy")
+
+```
+
+``` {r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, fig.height=6, fig.width=13, ft.align="left", connection="con")
+
+```
+
+
+```{r extract_data, eval=TRUE}
+rrv_raw <- DBI::dbGetQuery(con, 
+                             "
+                             SELECT * FROM dh_public_health.phess_release.caseevents ce 
+                             LEFT JOIN dh_public_health.phess_release.caseexposures exp ON ce.EVENT_ID = exp.EVENT_ID 
+                             -- LEFT JOIN dh_public_health.phess_release.events_buruli_ulcer bu ON ce.EVENT_ID = bu.EVENT_ID
+                             -- LEFT JOIN dh_public_health.phess_release.events_buruli_ulcer_exposure buex ON ce.EVENT_ID = buex.EVENT_ID
+                             -- LEFT JOIN dh_public_health.phess_release.caselabresults lab ON ce.EVENT_ID = lab.EVENT_ID
+                             WHERE ce.CONDITION = 'Ross River virus infection' 
+                             AND EVENT_DATE BETWEEN '2010-01-01' AND '2025-08-31' 
+                             ORDER BY EVENT_DATE DESC; 
+                             "
+                             )
+
+```
+
+``` {r configure}
+# setup factor variables levels
+nephu_lgas <- c("Banyule (C)", "Boroondara (C)", "Darebin (C)", "Hume (C)", "Knox (C)", "Manningham (C)", "Maroondah (C)", "Nillumbik (S)", "Whitehorse (C)", "Whittlesea (C)", "Yarra (C)", "Yarra Ranges (S)")
+
+nephu_lgas_short <- c("Banyule", "Boroondara", "Darebin", "Hume", "Knox", "Manningham", "Maroondah", "Nillumbik", "Whitehorse", "Whittlesea", "Yarra", "Yarra Ranges")
+
+agecat5_levels <- c("0-4", "5-9", "10-14", "15-19", "20-24", "25-29", "30-34", "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65-69", "70-74", "75-79", "80-84", "85+")
+
+# reconfigure data to include age grps, factors and epi-dates variables
+rrv_data_config <- rrv_raw %>% 
+  clean_names() %>% 
+  remove_empty("cols") %>% 
+  select(-c(created_by, create_date, modified_by, modification_date, status, starts_with("enhanced_surveillance"), discharge_summary_requested, unid, event_id_2, status_2)) %>% 
+  mutate(across(where(is.POSIXct), ymd)) %>% 
+  rename(defn = event_classification, 
+         age = age_years, 
+         atsi = indigenous_status, 
+         cob = country_of_birth) %>% 
+  mutate(agecat5 = case_when(between(age, 0, 4) ~ "0-4", 
+                             between(age, 5, 9) ~ "5-9",
+                             between(age, 10, 14) ~ "10-14",
+                             between(age, 15, 19) ~ "15-19",
+                             between(age, 20, 24) ~ "20-24",
+                             between(age, 25, 29) ~ "25-29",
+                             between(age, 30, 34) ~ "30-34",
+                             between(age, 35, 39) ~ "35-39",
+                             between(age, 40, 44) ~ "40-44",
+                             between(age, 45, 49) ~ "45-49",
+                             between(age, 50, 54) ~ "50-54",
+                             between(age, 55, 59) ~ "55-59",
+                             between(age, 60, 64) ~ "60-64",
+                             between(age, 65, 69) ~ "65-69",
+                             between(age, 70, 74) ~ "70-74",
+                             between(age, 75, 79) ~ "75-79",
+                             between(age, 80, 84) ~ "80-84",
+                             between(age, 85, 99) ~ "85+", 
+                             TRUE ~ NA_character_), 
+         agecat5 = factor(agecat5, levels=agecat5_levels), 
+         aus_born = case_when(cob=="Australia" ~ "Australia", 
+                              cob=="Not Stated" ~ "Not Stated", 
+                              cob=="Unknown" ~ "Not Stated", 
+                              TRUE ~ "Overseas"), 
+         aus_born = factor(aus_born, levels=c("Australia", "Overseas", "Not stated")), 
+         defn = factor(defn, levels=c("Confirmed", "Probable", "Suspected", "Rejected", "Not notifiable")), 
+         sex = factor(sex, levels=c("Female", "Male", "Not stated", "Other")), 
+         atsi = fct_collapse(factor(atsi, levels=c("Aboriginal and Torres Strait Islander origin", "Aboriginal but not Torres Strait Islander origin", "Not Aboriginal or Torres Strait Islander", "Missing/Not Stated")), `Aboriginal and/or Torres Strait Islander` = c("Aboriginal and Torres Strait Islander origin", "Aboriginal but not Torres Strait Islander origin")), 
+         epi_MY = my(paste(month(event_date), year(event_date), sep="-")), 
+         epiyear = epiyear(event_date), 
+         epi_Y = ymd(paste0(epiyear, "-01-01")), 
+         epiweek = epiweek(event_date), 
+         epimonth = month(event_date, label=TRUE), 
+         epi_WY = ceiling_date(event_date, "week") -1, 
+         mth_yr = paste(epimonth, epiyear)) %>% 
+  filter(defn %in% c("Confirmed", "Probable"))
+
+#writexl::write_xlsx(mu_data_config, "mu_data_config.xlsx")
+
+rrv_nephu <- rrv_data_config %>% 
+  filter(lga %in% nephu_lgas) %>% 
+  remove_empty("cols") %>% 
+  filter(primary_exposure=="Primary") %>% 
+  distinct(event_id, .keep_all=TRUE)
+
+rrv_vic <- rrv_data_config %>% 
+  filter(primary_exposure=="Primary") %>% 
+  distinct(event_id, .keep_all=TRUE)
+
+rrv_lphu <- rrv_vic %>% 
+  #filter(event_date >= "2022-07-01") %>% # date when codes no longer used for lphu
+  select(event_id, event_date, epi_MY, lphu) %>% 
+  mutate(lphu = factor(lphu, levels=c("NEPHU", "SEPHU", "WPHU", "BSWPHU", "GPHU", "GVPHU", "GWSMPHU", "LMPHU")))
+
+```
+
+``` {r}
+rrv_nephu_vic_counts_mth <- rrv_vic %>% 
+  #filter(defn %in% c("Confirmed", "Probable")) %>% 
+  group_by(epi_MY) %>% 
+  summarise(total = n()) %>% 
+  left_join(rrv_nephu %>% group_by(epi_MY) %>% summarise(total_nephu = n()), by="epi_MY") %>% 
+  replace_na(replace=list(total_nephu=0)) %>% 
+  mutate(pct_nephu = round(total_nephu/total*100, 1))
+
+
+rrv_nephu_vic_counts_yr <- tabyl(rrv_vic, epiyear) %>% 
+  left_join(tabyl(rrv_nephu, epiyear), by="epiyear") %>% 
+  #add_column(., tabyl(mu_nephu %>% filter(defn %in% c("Confirmed", "Probable")), epiyear)) %>% 
+  adorn_totals("row") %>% 
+  rename(VIC = n.x, 
+         NEPHU = n.y) %>% 
+  select(epiyear, VIC, NEPHU) %>% 
+  mutate(pct_nephu = round(NEPHU/VIC*100, 1)) %>% 
+  flextable() %>% 
+  set_header_labels(epiyear = "Year", pct_nephu = "% of VIC") %>% 
+  autofit() %>% 
+  #add_footer_lines("2024 is part year from Jan to Mar") %>% 
+  add_footer_lines("Cases include Confirmed and Probable cases")
+
+
+```
+
+# Monthly cases by year
+
+**Monthly cases by year from Jan 2010 - Aug 2025**
+
+```{r}
+data <- rrv_nephu_vic_counts_mth %>% 
+  mutate(yr = year(epi_MY), 
+         mth = month(epi_MY, label=TRUE, abbr=TRUE))
+
+max_val <- max(data$total_nephu)
+
+#scales::show_col(viridis::viridis(16))
+
+color_palette <- c("#374091", "#D55300", "#D89000", "#FB8072", "#80B1D3", "#F0E442", "#66A61E", "#FCCDE5", "#666666", "#BC80BD", "#5BC788", "#E7298A", "#481A6CFF", "#22A884FF", "#FDE725FF", "#31668EFF")
+
+
+yr_graph <- ggplot(data) + 
+  #geom_point(aes(x=mth, y=total_nephu, shape=factor(yr))) + 
+  geom_line(aes(x=mth, y=total_nephu, group=factor(yr), col=factor(yr)), linewidth=1) + 
+  scale_color_manual(values=color_palette) + 
+  #scale_color_viridis_d(option="D") + 
+  scale_y_continuous(breaks=seq(0, max_val+4, by=5)) + 
+  cowplot::theme_cowplot() + 
+  theme(plot.title = element_text(size=12)) + 
+  labs(title="Monthly case numbers of RRV in NEPHU", 
+         #caption=paste0("Data period: ", start_date, " to ", max_date), 
+         x="", 
+         y="Case numbers", 
+         col="Year")
+
+ggplotly(yr_graph)
+```
+
+# Cumulative cases by year
+
+**Cumulative cases from Jan 2010 - Aug 2025**
+
+```{r}
+cumsum_data <- rrv_nephu_vic_counts_mth %>% 
+  mutate(yr = year(epi_MY), 
+         mth = month(epi_MY, label=TRUE, abbr=TRUE)) %>% 
+  group_by(yr) %>% 
+  #arrange(yr, summer_mth) %>% 
+  mutate(cum_count = cumsum(total_nephu))
+
+
+cumsum_plot <- ggplot(cumsum_data) + 
+  geom_line(aes(x=mth, y=cum_count, group=factor(yr), col=factor(yr)), linewidth=1) + 
+  cowplot::theme_cowplot() + 
+  theme(plot.title = element_text(size=12)) + 
+  labs(title="Cumulative case numbers of RRV by month in NEPHU", 
+         #caption=paste0("Data period: ", start_date, " to ", max_date), 
+         x="", 
+         y="Cumulative case numbers", 
+         col="Year")
+
+
+cumsum_summer_data <- cumsum_data %>% 
+   mutate(
+    shifted_mth = ifelse(format(epi_MY, "%m") >= "05", 
+                           as.numeric(format(epi_MY, "%m")) - 4, 
+                           as.numeric(format(epi_MY, "%m")) + 8), 
+    shifted_mth_label = factor(as.character(mth), levels=c("May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr")), 
+    # shifted_mth_label = case_when(shifted_mth==1 ~ "Jan", 
+    #                               shifted_mth==2 ~ "Feb", 
+    #                               shifted_mth==3 ~ "Mar", 
+    #                               shifted_mth==4 ~ "Apr", 
+    #                               shifted_mth==5 ~ "May", 
+    #                               shifted_mth==6 ~ "Jun", 
+    #                               shifted_mth==7 ~ "Jul", 
+    #                               shifted_mth==8 ~ "Aug", 
+    #                               shifted_mth==9 ~ "Sep", 
+    #                               shifted_mth==10 ~ "Oct", 
+    #                               shifted_mth==11 ~ "Nov", 
+    #                               shifted_mth==12 ~ "Dec", 
+    #                               TRUE ~ NA_character_), 
+    # shifted_mth_label = factor(shifted_mth_label, levels=c("May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr")), 
+    shifted_yr = ifelse(format(epi_MY, "%m") >= "05", 
+                          as.numeric(format(epi_MY, "%Y")) - 2020, 
+                          as.numeric(format(epi_MY, "%Y")) - 2021)
+  ) %>% 
+  arrange(shifted_yr, shifted_mth) %>% 
+  group_by(shifted_yr) %>% 
+  mutate(cum_summer_count = cumsum(total_nephu))
+
+
+ggplot(cumsum_summer_data) + 
+  geom_line(aes(x=shifted_mth_label, y=cum_summer_count, group=factor(yr), col=factor(yr)), linewidth=1) + 
+  cowplot::theme_cowplot() + 
+  theme(plot.title = element_text(size=12)) + 
+  labs(title="Cumulative case numbers of RRV by month in NEPHU", 
+         #caption=paste0("Data period: ", start_date, " to ", max_date), 
+         x="", 
+         y="Cumulative case numbers", 
+         col="Year")
+```
+
