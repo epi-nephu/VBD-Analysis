@@ -9,15 +9,27 @@ knit: (function(input, ...) {
   rmarkdown::render(input, output_file = paste0("RRV_NEPHU_", format(Sys.Date(), "%d %b %Y")), output_dir = "../Output") })
 ---
 
+```{r}
+library(here)
+library(tidyverse)
+library(janitor)
+library(sf)
+library(plotly)
+library(flextable)
+library(flexdashboard)
+
+```
+
+
 ```{r set params}
-start_date <- ymd("2022-01-01")
+start_date <- ymd("2010-01-01")
 max_date <- ymd("2025-08-31")
 min_date_1yr <- max_date - years(1) + days(1)
 
 ```
 
 ```{r dbcon, include=FALSE, eval=FALSE}
-con <- DBI::dbConnect(odbc::odbc(), "PHAR")
+con <- DBI::dbConnect(odbc::odbc(), "PHAR proxy")
 
 ```
 
@@ -26,15 +38,7 @@ knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, fig.height=6, 
 
 ```
 
-```{r}
-library(here)
-library(tidyverse)
-library(janitor)
-library(sf)
-library(flextable)
-library(flexdashboard)
 
-```
 
 
 ```{r extract_data, eval=FALSE}
@@ -154,7 +158,7 @@ rrv_nephu_vic_counts_yr <- tabyl(rrv_vic, epiyear) %>%
 
 ```
 
-**Monthly cases by year from Jan 2022 - Aug 2025**
+**Monthly cases by year from Jan 2010 - Aug 2025**
 
 ```{r}
 data <- rrv_nephu_vic_counts_mth %>% 
@@ -163,8 +167,16 @@ data <- rrv_nephu_vic_counts_mth %>%
 
 max_val <- max(data$total_nephu)
 
+scales::show_col(viridis::viridis(16))
+
+color_palette <- c("#374091", "#D55300", "#D89000", "#FB8072", "#80B1D3", "#F0E442", "#66A61E", "#FCCDE5", "#666666", "#BC80BD", "#5BC788", "#E7298A", "#481A6CFF", "#22A884FF", "#FDE725FF", "#31668EFF")
+
+
 yr_graph <- ggplot(data) + 
+  #geom_point(aes(x=mth, y=total_nephu, shape=factor(yr))) + 
   geom_line(aes(x=mth, y=total_nephu, group=factor(yr), col=factor(yr)), linewidth=1) + 
+  scale_color_manual(values=color_palette) + 
+  #scale_color_viridis_d(option="D") + 
   scale_y_continuous(breaks=seq(0, max_val+4, by=5)) + 
   cowplot::theme_cowplot() + 
   theme(plot.title = element_text(size=12)) + 
