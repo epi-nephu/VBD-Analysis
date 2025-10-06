@@ -17,7 +17,7 @@ library(flexdashboard)
 
 ```{r set params}
 start_date <- ymd("2010-01-01")
-max_date <- ymd("2025-08-31")
+max_date <- ymd("2025-09-30")
 min_date_1yr <- max_date - years(1) + days(1)
 
 ```
@@ -35,17 +35,16 @@ knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, fig.height=6, 
 
 ```{r extract_data, eval=TRUE}
 rrv_raw <- DBI::dbGetQuery(con, 
-                             "
+                             paste0("
                              SELECT * FROM dh_public_health.phess_release.caseevents ce 
                              LEFT JOIN dh_public_health.phess_release.caseexposures exp ON ce.EVENT_ID = exp.EVENT_ID 
                              -- LEFT JOIN dh_public_health.phess_release.events_buruli_ulcer bu ON ce.EVENT_ID = bu.EVENT_ID
                              -- LEFT JOIN dh_public_health.phess_release.events_buruli_ulcer_exposure buex ON ce.EVENT_ID = buex.EVENT_ID
                              -- LEFT JOIN dh_public_health.phess_release.caselabresults lab ON ce.EVENT_ID = lab.EVENT_ID
                              WHERE ce.CONDITION = 'Ross River virus infection' 
-                             AND EVENT_DATE BETWEEN '2010-01-01' AND '2025-08-31' 
-                             ORDER BY EVENT_DATE DESC; 
-                             "
-                             )
+                             AND EVENT_DATE BETWEEN '", start_date, "' AND '", max_date, "'\n 
+                             ORDER BY EVENT_DATE DESC;") 
+)
 
 ```
 
@@ -152,7 +151,7 @@ rrv_nephu_vic_counts_yr <- tabyl(rrv_vic, epiyear) %>%
 
 # Monthly cases by year
 
-**Monthly cases by year from Jan 2010 - Aug 2025**
+**Monthly cases by year from Jan 2010 - Sep 2025**
 
 ```{r}
 data <- rrv_nephu_vic_counts_mth %>% 
@@ -236,7 +235,7 @@ cumsum_summer_data <- cumsum_data %>%
   mutate(cum_summer_count = cumsum(total_nephu))
 
 
-ggplot(cumsum_summer_data) + 
+cumsum_summer_plot <- ggplot(cumsum_summer_data) + 
   geom_line(aes(x=shifted_mth_label, y=cum_summer_count, group=factor(yr), col=factor(yr)), linewidth=1) + 
   cowplot::theme_cowplot() + 
   theme(plot.title = element_text(size=12)) + 
@@ -245,5 +244,39 @@ ggplot(cumsum_summer_data) +
          x="", 
          y="Cumulative case numbers", 
          col="Year")
+
+```
+
+Epicurve of risk factor
+
+```{r}
+tabyl(rrv_nephu, risk_factor)
+
+rrv_nephu_risk_counts <- rrv_nephu %>% 
+  group_by(epi_MY, risk_factor) %>% 
+  summarise(total = n()) %>% 
+  #left_join(rrv_nephu %>% group_by(epi_MY) %>% summarise(total_nephu = n()), by="epi_MY") %>% 
+  replace_na(replace=list(total_nephu=0)) %>% 
+  mutate(pct_nephu = round(total_nephu/total*100, 1))
+
+
+weekly_breaks_all <- seq.Date(
+  from = floor_date(min(rrv_nephu$event_date[rrv_nephu$event_date>ymd("2021-12-31")], na.rm=T),   "week", week_start = 1), # monday before first case
+  to   = ceiling_date(max(rrv_nephu$event_date, na.rm=T), "week", week_start = 1), # monday after last case
+  by   = "week")
+
+monthly_breaks_all <- seq.Date(
+  from = floor_date(min(rrv_nephu$event_date[rrv_nephu$event_date>ymd("2021-12-31")], na.rm=T),   "month"), # monday before first case
+  to   = ceiling_date(max(rrv_nephu$event_date, na.rm=T), "month"), # monday after last case
+  by   = "month")
+
+rrv_nephu %>% 
+  filter(event_date>ymd("2021-12-31")) %>% 
+  ggplot() + 
+  geom_histogram(aes(x=epi_MY, group=risk_factor, fill=risk_factor), col="black", breaks = monthly_breaks_all) + 
+  scale_x_date(expand=c(0,0), date_breaks="3 months") + 
+  theme(legend.position="bottom", 
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
 ```
 
